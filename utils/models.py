@@ -7,25 +7,26 @@ import torcheval.metrics as tm
 class ELOPredictor(Module):
     def __init__(self):
         super().__init__()
-        self.lstm = LSTM(input_size=32, hidden_size=128, num_layers=1, batch_first=True)
-        self.meta_linear = Linear(8, 32)
-        self.linear = Linear(160, 2)
+        self.lstm = LSTM(input_size=32, hidden_size=256, num_layers=2, batch_first=True)
+        self.meta_linear = Linear(8, 128)
+        self.meta_linear02 = Linear(128, 256)
+       
+        self.linear = Linear(512, 128)
+        self.linear02 = Linear(128, 2)
+       
         self.relu = ReLU()
     def forward(self, x_moves, x_meta):
-        x_moves, (_, _) = self.lstm(x_moves)
+        _, (h_n, _) = self.lstm(x_moves)
         
         x_meta = self.meta_linear(x_meta)
         x_meta = self.relu(x_meta)
-        
-        padded_output, seq_lengths = pad_packed_sequence(x_moves, batch_first=True)
-        print(padded_output.shape)
-
-        batch_size = padded_output.shape[0]
-        last_outputs = torch.stack([padded_output[i, seq_lengths[i] - 1, :] for i in range(batch_size)])
-        
-        outputs = torch.concatenate((last_outputs, x_meta), dim=-1)
+        x_meta = self.meta_linear02(x_meta)
+        x_meta = self.relu(x_meta)
+                
+        outputs = torch.concatenate((h_n[-1], x_meta), dim=-1)
         outputs = self.linear(outputs)
         outputs = self.relu(outputs)
+        outputs = self.linear02(outputs)
         
         return outputs
 
@@ -51,10 +52,14 @@ def train(model, train_loader, optimizer, loss_function, device):
         progress_bar.set_postfix(loss=loss)
         progress_bar.update()
     print(f'Train - Loss: {loss:.4f}')
+    return {
+        "Loss/train": loss
+    }
 
 def validate(model, valid_loader, loss_function, device):
-    r2_metric = tm.R2Score(multioutput='raw_values')
-    mse_metric = tm.MeanSquaredError(multioutput='raw_values')
+    r2_metric = tm.R2Score(multioutput='raw_values').to(device)
+    mse_metric = tm.MeanSquaredError(multioutput='raw_values').to(device)
+    
     loss = 0
     progress_bar = tqdm(valid_loader, desc=f"validation")
     model.eval()
@@ -78,3 +83,10 @@ def validate(model, valid_loader, loss_function, device):
     r2_result = r2_metric.compute()
     mse_result = mse_metric.compute()
     print(f'Validation - Loss: {loss:.4f}\tr2_score: {r2_result}\tmse_result: {mse_result}')
+    return {
+        "Loss/Valid": loss,
+        "R2 score/white_elo": r2_result[0],
+        "R2 score/black_elo": r2_result[1],
+        "MSE/white_elo": mse_result[0],
+        "MSE/black_elo": mse_result[1]
+    }
